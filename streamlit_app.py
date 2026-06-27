@@ -28,7 +28,7 @@ MAX_SRC_LENGTH = 64
 MAX_TGT_LENGTH = 64
 
 # ================================================================
-# ID FILE GOOGLE DRIVE (SUDAH DIISI)
+# ID FILE GOOGLE DRIVE
 # ================================================================
 
 FILE_IDS = {
@@ -44,24 +44,26 @@ FILE_IDS = {
 }
 
 # ================================================================
-# FUNGSI DOWNLOAD MODEL DARI GOOGLE DRIVE
+# FUNGSI DOWNLOAD MODEL DARI GOOGLE DRIVE (FIXED)
 # ================================================================
 
 def download_model_from_drive():
-    """Download model dengan file individual dari Google Drive"""
+    """Download model dengan file individual - tidak infinite loop"""
     
     config_path = os.path.join(MODEL_DIR, "config.json")
     model_path = os.path.join(MODEL_DIR, "model.safetensors")
     
-    # Cek apakah model sudah ada
+    # Cek apakah model sudah ada dan lengkap
     if os.path.exists(config_path) and os.path.exists(model_path):
-        st.info("Model sudah ada. Melanjutkan...")
-        return True
-    
-    # Jika folder ada tapi tidak lengkap, hapus
-    if os.path.exists(MODEL_DIR):
-        import shutil
-        shutil.rmtree(MODEL_DIR)
+        try:
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            if size_mb > 500:
+                st.info(f"Model sudah ada. Ukuran: {size_mb:.1f} MB")
+                return True
+            else:
+                st.warning(f"File model tidak lengkap ({size_mb:.1f} MB). Mendownload ulang...")
+        except:
+            pass
     
     try:
         import gdown
@@ -71,28 +73,76 @@ def download_model_from_drive():
     
     os.makedirs(MODEL_DIR, exist_ok=True)
     
+    # Urutkan file dari yang kecil ke besar
+    FILE_IDS_ORDERED = {
+        "added_tokens.json": "1YR2vlCw2fz_6DIHFxFRVz73Wcu_Yd9HA",
+        "config.json": "1KecJMLlqeniG5yqQpS3AnOl0yE13nR9v",
+        "generation_config.json": "1JBVKINDSDknEDED-TR1xiokocPfWxw_P",
+        "project_config.json": "1dkcNpMWlL5CqnHe7T5ra1af2tGzAqy3G",
+        "special_tokens_map.json": "1h_8pCi9ZKxVvtS696p64p44ZgEGvWd20",
+        "tokenizer_config.json": "17NXspewbqsxkjy4OJQmTlCTRwgqRvsUn",
+        "training_history.json": "12buknJ4VAvkcBYFzBVK4o667WONl9z4q",
+        "sentencepiece.bpe.model": "1VR7jlkT5O4V4dV0r41seF4jLtSy1-F1Z",
+        "model.safetensors": "1fL6eMzMZV3f7U_wLE0bdiYyUe79mTH2F",
+    }
+    
     try:
-        st.info("Mendownload model dari Google Drive (file individual)...")
-        st.info("Ukuran file total ~502 MB. Proses ini memakan waktu 5-10 menit.")
+        st.info("Mendownload model dari Google Drive...")
+        st.info("File model.safetensors (502 MB) akan memakan waktu 5-10 menit.")
         
         progress_bar = st.progress(0)
-        total_files = len(FILE_IDS)
+        total_files = len(FILE_IDS_ORDERED)
+        downloaded_count = 0
+        failed_files = []
         
-        for idx, (filename, file_id) in enumerate(FILE_IDS.items()):
+        for filename, file_id in FILE_IDS_ORDERED.items():
+            output = os.path.join(MODEL_DIR, filename)
+            
+            # Skip jika file sudah ada dan ukuran cukup (kecuali model.safetensors)
+            if os.path.exists(output) and filename != "model.safetensors":
+                st.write(f"File {filename} sudah ada. Lewati.")
+                downloaded_count += 1
+                progress_bar.progress(downloaded_count / total_files)
+                continue
+            
+            if filename == "model.safetensors" and os.path.exists(output):
+                size_mb = os.path.getsize(output) / (1024 * 1024)
+                if size_mb > 500:
+                    st.write(f"File {filename} sudah ada ({size_mb:.1f} MB). Lewati.")
+                    downloaded_count += 1
+                    progress_bar.progress(downloaded_count / total_files)
+                    continue
+                else:
+                    st.warning(f"File model tidak lengkap ({size_mb:.1f} MB). Mendownload ulang...")
+                    # Hapus file yang corrupt
+                    os.remove(output)
+            
             st.write(f"Mengunduh: {filename}")
             url = f"https://drive.google.com/uc?id={file_id}"
-            output = os.path.join(MODEL_DIR, filename)
-            gdown.download(url, output, quiet=False)
-            progress_bar.progress((idx + 1) / total_files)
+            
+            try:
+                gdown.download(url, output, quiet=False)
+                downloaded_count += 1
+                progress_bar.progress(downloaded_count / total_files)
+            except Exception as e:
+                st.error(f"Gagal download {filename}: {str(e)}")
+                failed_files.append(filename)
+                downloaded_count += 1
+                progress_bar.progress(downloaded_count / total_files)
         
-        # Verifikasi
+        # Verifikasi final
         if os.path.exists(config_path) and os.path.exists(model_path):
-            st.success("Model berhasil didownload!")
             size_mb = os.path.getsize(model_path) / (1024 * 1024)
-            st.info(f"Ukuran model: {size_mb:.1f} MB")
-            return True
+            if size_mb > 500:
+                st.success(f"Model berhasil didownload! Ukuran: {size_mb:.1f} MB")
+                if failed_files:
+                    st.warning(f"Beberapa file gagal: {', '.join(failed_files)}")
+                return True
+            else:
+                st.error(f"Download gagal. File model tidak lengkap ({size_mb:.1f} MB).")
+                return False
         else:
-            st.error("Download gagal. File model tidak lengkap.")
+            st.error("Download gagal. File config.json atau model.safetensors tidak ditemukan.")
             return False
             
     except Exception as e:
@@ -114,6 +164,7 @@ def load_model_and_tokenizer():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
+    # Load tokenizer
     try:
         tokenizer = IndoNLGTokenizer.from_pretrained(
             MODEL_DIR,
@@ -133,6 +184,7 @@ def load_model_and_tokenizer():
                 "additional_special_tokens": tokens_to_add
             })
     
+    # Load model
     try:
         model = MBartForConditionalGeneration.from_pretrained(
             MODEL_DIR,
@@ -145,9 +197,11 @@ def load_model_and_tokenizer():
         st.error(f"Error loading model: {str(e)}")
         st.stop()
     
+    # Resize embedding
     if len(tokenizer) != model.config.vocab_size:
         model.resize_token_embeddings(len(tokenizer))
     
+    # Pindahkan ke device
     if torch.cuda.is_available():
         device = torch.device('cuda')
         model = model.to(device)
@@ -158,6 +212,7 @@ def load_model_and_tokenizer():
     
     model.eval()
     
+    # Matikan gradient
     for param in model.parameters():
         param.requires_grad = False
     
