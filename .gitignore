@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+model_axis_indobart/   # <-- INI PENTING!
+.streamlit/secrets.toml
