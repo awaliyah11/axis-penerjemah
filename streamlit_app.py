@@ -1,12 +1,13 @@
 # ================================================================
 # AXIS - Penerjemah Cerdas Bahasa Daerah Sulawesi Tenggara
-# Deployment dengan Streamlit + HuggingFace Download
+# Deployment dengan Streamlit + Google Drive (Optimasi)
 # ================================================================
 
 import os
 import json
 import re
 import gc
+import time
 import torch
 import streamlit as st
 from pathlib import Path
@@ -20,7 +21,6 @@ try:
 except ImportError:
     from transformers import MBartForConditionalGeneration
 
-from transformers import MBartConfig
 from indobenchmark import IndoNLGTokenizer
 
 # ================================================================
@@ -32,55 +32,112 @@ MAX_SRC_LENGTH = 64
 MAX_TGT_LENGTH = 64
 
 # ================================================================
-# FUNGSI DOWNLOAD DARI HUGGINGFACE
+# ID FILE GOOGLE DRIVE
 # ================================================================
 
-def download_model_from_huggingface():
-    """Download model dari HuggingFace Hub"""
-    
-    config_path = os.path.join(MODEL_DIR, "config.json")
-    model_path = os.path.join(MODEL_DIR, "model.safetensors")
-    
-    # Cek apakah model sudah ada
-    if os.path.exists(config_path) and os.path.exists(model_path):
-        size_mb = os.path.getsize(model_path) / (1024 * 1024)
-        if size_mb > 500:
-            return True
-    
-    try:
-        from huggingface_hub import snapshot_download, hf_hub_download
-        
-        st.info("Mendownload model dari HuggingFace Hub...")
-        st.info("Ukuran file 502 MB. Proses ini memakan waktu 5-10 menit.")
-        
-        # Download semua file
-        snapshot_download(
-            repo_id="awaliyah11/axis-model",
-            local_dir=MODEL_DIR,
-            local_dir_use_symlinks=False,
-            ignore_patterns=["*.safetensors"],  # Download file besar terpisah
-        )
-        
-        # Download file besar terpisah
-        hf_hub_download(
-            repo_id="awaliyah11/axis-model",
-            filename="model.safetensors",
-            local_dir=MODEL_DIR,
-            local_dir_use_symlinks=False,
-        )
-        
-        # Verifikasi
-        if os.path.exists(config_path) and os.path.exists(model_path):
-            size_mb = os.path.getsize(model_path) / (1024 * 1024)
-            st.success(f"Model berhasil didownload! Ukuran: {size_mb:.1f} MB")
-            return True
-        else:
-            st.error("Download gagal. File tidak lengkap.")
-            return False
-            
-    except Exception as e:
-        st.error(f"Error download: {str(e)}")
+FILE_IDS = {
+    "added_tokens.json": "1YR2vlCw2fz_6DIHFxFRVz73Wcu_Yd9HA",
+    "config.json": "1KecJMLlqeniG5yqQpS3AnOl0yE13nR9v",
+    "generation_config.json": "1JBVKINDSDknEDED-TR1xiokocPfWxw_P",
+    "model.safetensors": "1fL6eMzMZV3f7U_wLE0bdiYyUe79mTH2F",
+    "project_config.json": "1dkcNpMWlL5CqnHe7T5ra1af2tGzAqy3G",
+    "sentencepiece.bpe.model": "1VR7jlkT5O4V4dV0r41seF4jLtSy1-F1Z",
+    "special_tokens_map.json": "1h_8pCi9ZKxVvtS696p64p44ZgEGvWd20",
+    "tokenizer_config.json": "17NXspewbqsxkjy4OJQmTlCTRwgqRvsUn",
+    "training_history.json": "12buknJ4VAvkcBYFzBVK4o667WONl9z4q",
+}
+
+# Ukuran minimal file valid (bytes)
+MIN_SIZE = {
+    "model.safetensors": 500 * 1024 * 1024,
+    "sentencepiece.bpe.model": 900 * 1024,
+    "config.json": 1024,
+}
+
+# ================================================================
+# FUNGSI DOWNLOAD
+# ================================================================
+
+def is_file_valid(filename):
+    """Cek apakah file valid"""
+    filepath = os.path.join(MODEL_DIR, filename)
+    if not os.path.exists(filepath):
         return False
+    size = os.path.getsize(filepath)
+    min_size = MIN_SIZE.get(filename, 0)
+    return size >= min_size
+
+def download_file(file_id, filename, max_retries=3):
+    """Download file dengan retry"""
+    filepath = os.path.join(MODEL_DIR, filename)
+    
+    # Skip jika sudah valid
+    if is_file_valid(filename):
+        return True
+    
+    # Hapus file corrupt
+    if os.path.exists(filepath):
+        try:
+            os.remove(filepath)
+        except:
+            pass
+    
+    for attempt in range(max_retries):
+        try:
+            import gdown
+            url = f"https://drive.google.com/uc?id={file_id}"
+            gdown.download(url, filepath, quiet=True)
+            
+            if is_file_valid(filename):
+                return True
+                
+        except Exception as e:
+            pass
+        
+        # Sleep sebelum retry
+        if attempt < max_retries - 1:
+            time.sleep(2)
+    
+    return False
+
+def download_model_from_drive():
+    """Download semua file dari Google Drive"""
+    
+    # Cek semua file sudah valid
+    all_valid = True
+    for filename in FILE_IDS.keys():
+        if not is_file_valid(filename):
+            all_valid = False
+            break
+    
+    if all_valid:
+        return True
+    
+    # Buat folder
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    
+    # Download file satu per satu
+    for filename, file_id in FILE_IDS.items():
+        if is_file_valid(filename):
+            continue
+        
+        success = download_file(file_id, filename)
+        
+        if not success:
+            # Coba sekali lagi dengan metode berbeda
+            try:
+                import gdown
+                url = f"https://drive.google.com/uc?id={file_id}"
+                gdown.download(url, os.path.join(MODEL_DIR, filename), quiet=False)
+            except:
+                pass
+    
+    # Verifikasi final
+    for filename in FILE_IDS.keys():
+        if not is_file_valid(filename):
+            return False
+    
+    return True
 
 # ================================================================
 # LOAD MODEL
@@ -88,10 +145,10 @@ def download_model_from_huggingface():
 
 @st.cache_resource
 def load_model_and_tokenizer():
-    """Load model dari HuggingFace Hub"""
+    """Load model"""
     
-    if not download_model_from_huggingface():
-        st.error("Gagal memuat model. Periksa koneksi dan coba lagi.")
+    if not download_model_from_drive():
+        st.error("Gagal memuat model.")
         st.stop()
     
     gc.collect()
@@ -119,17 +176,13 @@ def load_model_and_tokenizer():
             })
     
     # Load model
-    try:
-        model = MBartForConditionalGeneration.from_pretrained(
-            MODEL_DIR,
-            local_files_only=True,
-            low_cpu_mem_usage=True,
-            torch_dtype=torch.float16,
-            ignore_mismatched_sizes=True,
-        )
-    except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
-        st.stop()
+    model = MBartForConditionalGeneration.from_pretrained(
+        MODEL_DIR,
+        local_files_only=True,
+        low_cpu_mem_usage=True,
+        torch_dtype=torch.float16,
+        ignore_mismatched_sizes=True,
+    )
     
     if len(tokenizer) != model.config.vocab_size:
         model.resize_token_embeddings(len(tokenizer))
