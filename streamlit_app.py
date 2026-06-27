@@ -23,27 +23,43 @@ from indobenchmark import IndoNLGTokenizer
 # KONFIGURASI
 # ================================================================
 
-GOOGLE_DRIVE_FOLDER_ID = "1IV_O1cPFJppKh7iLJdmyMhNLv-j_6XNm"
 MODEL_DIR = "./model_axis_indobart"
 MAX_SRC_LENGTH = 64
 MAX_TGT_LENGTH = 64
+
+# ================================================================
+# ID FILE GOOGLE DRIVE (SUDAH DIISI)
+# ================================================================
+
+FILE_IDS = {
+    "added_tokens.json": "1YR2vlCw2fz_6DIHFxFRVz73Wcu_Yd9HA",
+    "config.json": "1KecJMLlqeniG5yqQpS3AnOl0yE13nR9v",
+    "generation_config.json": "1JBVKINDSDknEDED-TR1xiokocPfWxw_P",
+    "model.safetensors": "1fL6eMzMZV3f7U_wLE0bdiYyUe79mTH2F",
+    "project_config.json": "1dkcNpMWlL5CqnHe7T5ra1af2tGzAqy3G",
+    "sentencepiece.bpe.model": "1VR7jlkT5O4V4dV0r41seF4jLtSy1-F1Z",
+    "special_tokens_map.json": "1h_8pCi9ZKxVvtS696p64p44ZgEGvWd20",
+    "tokenizer_config.json": "17NXspewbqsxkjy4OJQmTlCTRwgqRvsUn",
+    "training_history.json": "12buknJ4VAvkcBYFzBVK4o667WONl9z4q",
+}
 
 # ================================================================
 # FUNGSI DOWNLOAD MODEL DARI GOOGLE DRIVE
 # ================================================================
 
 def download_model_from_drive():
-    """Download model dari Google Drive jika folder model tidak ada"""
+    """Download model dengan file individual dari Google Drive"""
     
     config_path = os.path.join(MODEL_DIR, "config.json")
     model_path = os.path.join(MODEL_DIR, "model.safetensors")
     
+    # Cek apakah model sudah ada
     if os.path.exists(config_path) and os.path.exists(model_path):
-        print("Model sudah ada di server. Melanjutkan...")
+        st.info("Model sudah ada. Melanjutkan...")
         return True
     
+    # Jika folder ada tapi tidak lengkap, hapus
     if os.path.exists(MODEL_DIR):
-        print("Folder model ditemukan tapi tidak lengkap. Mendownload ulang...")
         import shutil
         shutil.rmtree(MODEL_DIR)
     
@@ -56,21 +72,22 @@ def download_model_from_drive():
     os.makedirs(MODEL_DIR, exist_ok=True)
     
     try:
-        folder_url = f"https://drive.google.com/drive/folders/{GOOGLE_DRIVE_FOLDER_ID}"
+        st.info("Mendownload model dari Google Drive (file individual)...")
+        st.info("Ukuran file total ~502 MB. Proses ini memakan waktu 5-10 menit.")
         
-        st.info("Mendownload model dari Google Drive...")
-        st.info("Ukuran file 502 MB. Proses ini memakan waktu 5-10 menit.")
+        progress_bar = st.progress(0)
+        total_files = len(FILE_IDS)
         
-        gdown.download_folder(
-            folder_url, 
-            output=MODEL_DIR, 
-            quiet=False,
-            use_cookies=False
-        )
+        for idx, (filename, file_id) in enumerate(FILE_IDS.items()):
+            st.write(f"Mengunduh: {filename}")
+            url = f"https://drive.google.com/uc?id={file_id}"
+            output = os.path.join(MODEL_DIR, filename)
+            gdown.download(url, output, quiet=False)
+            progress_bar.progress((idx + 1) / total_files)
         
+        # Verifikasi
         if os.path.exists(config_path) and os.path.exists(model_path):
             st.success("Model berhasil didownload!")
-            
             size_mb = os.path.getsize(model_path) / (1024 * 1024)
             st.info(f"Ukuran model: {size_mb:.1f} MB")
             return True
