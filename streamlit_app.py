@@ -1,6 +1,6 @@
 # ================================================================
 # AXIS - Penerjemah Cerdas Bahasa Daerah Sulawesi Tenggara
-# Deployment dengan Streamlit + Google Drive Auto Download
+# Deployment dengan Streamlit + Multi-Method Download
 # ================================================================
 
 import os
@@ -57,7 +57,7 @@ MIN_FILE_SIZES = {
 }
 
 # ================================================================
-# FUNGSI DOWNLOAD - SILENT MODE (TANPA PESAN DI HALAMAN)
+# FUNGSI DOWNLOAD DENGAN 3 METODE
 # ================================================================
 
 def is_file_valid(filename, filepath):
@@ -68,8 +68,68 @@ def is_file_valid(filename, filepath):
     min_size = MIN_FILE_SIZES.get(filename, 0)
     return size >= min_size
 
+def download_with_retry(file_id, output, max_retries=3):
+    """Download file dengan 3 metode berbeda (gdown, requests, direct)"""
+    
+    for attempt in range(max_retries):
+        # Method 1: gdown
+        try:
+            import gdown
+            url = f"https://drive.google.com/uc?id={file_id}"
+            gdown.download(url, output, quiet=True)
+            if os.path.exists(output) and os.path.getsize(output) > 0:
+                return True
+        except:
+            pass
+        
+        # Method 2: requests dengan confirm token (untuk file besar)
+        try:
+            import requests
+            import re
+            
+            url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            session = requests.Session()
+            response = session.get(url, stream=True)
+            
+            # Cek apakah ada confirm token (untuk file > 100MB)
+            if 'confirm' in response.text:
+                confirm_match = re.search(r'confirm=([^&]+)', response.text)
+                if confirm_match:
+                    confirm_token = confirm_match.group(1)
+                    url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
+                    response = session.get(url, stream=True)
+            
+            if response.status_code == 200:
+                with open(output, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                if os.path.exists(output) and os.path.getsize(output) > 0:
+                    return True
+        except:
+            pass
+        
+        # Method 3: download dengan direct link (confirm=1)
+        try:
+            import requests
+            url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=1"
+            response = requests.get(url, stream=True)
+            if response.status_code == 200:
+                with open(output, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                if os.path.exists(output) and os.path.getsize(output) > 0:
+                    return True
+        except:
+            pass
+        
+        # Tunggu sebelum retry
+        if attempt < max_retries - 1:
+            time.sleep(3)
+    
+    return False
+
 def download_model_from_drive():
-    """Download model - tanpa menampilkan pesan di halaman"""
+    """Download model dengan 3 metode berbeda - tanpa pesan di halaman"""
     
     config_path = os.path.join(MODEL_DIR, "config.json")
     model_path = os.path.join(MODEL_DIR, "model.safetensors")
@@ -82,7 +142,6 @@ def download_model_from_drive():
             all_valid = False
             break
     
-    # Jika semua valid, langsung return
     if all_valid and os.path.exists(config_path) and os.path.exists(model_path):
         return True
     
@@ -90,8 +149,7 @@ def download_model_from_drive():
     try:
         import gdown
     except ImportError:
-        st.error("Library gdown tidak ditemukan. Install dengan: pip install gdown")
-        st.stop()
+        pass
     
     os.makedirs(MODEL_DIR, exist_ok=True)
     
@@ -109,19 +167,15 @@ def download_model_from_drive():
             except:
                 pass
         
-        # Download file
-        url = f"https://drive.google.com/uc?id={file_id}"
-        try:
-            gdown.download(url, filepath, quiet=True)
-        except:
-            # Fallback dengan requests
+        # Download dengan 3 metode
+        success = download_with_retry(file_id, filepath)
+        
+        # Jika semua metode gagal, coba sekali lagi dengan gdown (verbose)
+        if not success:
             try:
-                import requests
-                response = requests.get(url, stream=True)
-                if response.status_code == 200:
-                    with open(filepath, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
+                import gdown
+                url = f"https://drive.google.com/uc?id={file_id}"
+                gdown.download(url, filepath, quiet=False)
             except:
                 pass
     
@@ -134,15 +188,56 @@ def download_model_from_drive():
     return True
 
 # ================================================================
-# LOAD MODEL - TANPA PESAN DI HALAMAN
+# FALLBACK: DOWNLOAD DARI HUGGINGFACE (Jika Google Drive Gagal)
+# ================================================================
+
+def download_from_huggingface():
+    """Fallback: download model dari HuggingFace Hub"""
+    try:
+        from huggingface_hub import snapshot_download
+        
+        st.info("Mendownload model dari HuggingFace Hub...")
+        snapshot_download(
+            repo_id="awaliyah11/axis-model",
+            local_dir=MODEL_DIR,
+            local_dir_use_symlinks=False,
+            ignore_patterns=["*.safetensors"],  # Download file besar terpisah
+        )
+        
+        # Download file besar terpisah
+        try:
+            from huggingface_hub import hf_hub_download
+            hf_hub_download(
+                repo_id="awaliyah11/axis-model",
+                filename="model.safetensors",
+                local_dir=MODEL_DIR,
+                local_dir_use_symlinks=False,
+            )
+        except:
+            pass
+            
+        return True
+    except:
+        return False
+
+# ================================================================
+# LOAD MODEL - DENGAN FALLBACK
 # ================================================================
 
 @st.cache_resource
 def load_model_and_tokenizer():
-    """Load model - tanpa pesan di halaman"""
+    """Load model - dengan fallback ke HuggingFace jika Google Drive gagal"""
     
-    if not download_model_from_drive():
-        st.error("Gagal memuat model. Periksa koneksi dan coba lagi.")
+    # Coba download dari Google Drive
+    download_success = download_model_from_drive()
+    
+    # Jika gagal, coba dari HuggingFace
+    if not download_success:
+        st.warning("Download dari Google Drive gagal. Mencoba dari HuggingFace Hub...")
+        download_success = download_from_huggingface()
+    
+    if not download_success:
+        st.error("Gagal memuat model dari Google Drive dan HuggingFace.")
         st.stop()
     
     gc.collect()
