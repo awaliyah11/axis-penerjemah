@@ -57,184 +57,106 @@ MIN_FILE_SIZES = {
 }
 
 # ================================================================
-# FUNGSI DOWNLOAD DENGAN RETRY DAN VERIFIKASI
+# FUNGSI DOWNLOAD - SILENT MODE (TANPA PESAN DI HALAMAN)
 # ================================================================
-
-def download_with_retry(url, output, max_retries=3, delay=5):
-    """Download file dengan retry mechanism"""
-    
-    for attempt in range(max_retries):
-        try:
-            import gdown
-            st.write(f"  Attempt {attempt + 1}/{max_retries}...")
-            
-            gdown.download(url, output, quiet=False)
-            
-            # Verifikasi file
-            if os.path.exists(output) and os.path.getsize(output) > 0:
-                return True
-            else:
-                st.write(f"  File empty or not created. Retrying...")
-                
-        except Exception as e:
-            st.write(f"  Error: {str(e)[:100]}")
-            
-        if attempt < max_retries - 1:
-            st.write(f"  Waiting {delay}s before retry...")
-            time.sleep(delay)
-    
-    return False
 
 def is_file_valid(filename, filepath):
     """Cek apakah file valid berdasarkan ukuran minimal"""
-    
     if not os.path.exists(filepath):
         return False
-    
     size = os.path.getsize(filepath)
     min_size = MIN_FILE_SIZES.get(filename, 0)
-    
     return size >= min_size
 
 def download_model_from_drive():
-    """Download model dengan verifikasi ukuran file - NO INFINITE LOOP"""
+    """Download model - tanpa menampilkan pesan di halaman"""
     
     config_path = os.path.join(MODEL_DIR, "config.json")
     model_path = os.path.join(MODEL_DIR, "model.safetensors")
     
-    # ============================================================
-    # STEP 1: Cek file yang sudah ada
-    # ============================================================
-    
-    existing_files = []
-    missing_files = []
-    corrupt_files = []
-    
-    for filename in FILE_IDS.keys():
-        filepath = os.path.join(MODEL_DIR, filename)
-        
-        if is_file_valid(filename, filepath):
-            existing_files.append(filename)
-        elif os.path.exists(filepath):
-            # File ada tapi ukuran tidak cukup -> corrupt
-            corrupt_files.append(filename)
-            try:
-                os.remove(filepath)
-                st.warning(f"Menghapus file corrupt: {filename}")
-            except:
-                pass
-        else:
-            missing_files.append(filename)
-    
-    # Log status
-    st.info(f"File existing: {len(existing_files)}")
-    st.info(f"File missing: {len(missing_files)}")
-    
-    # Jika semua file sudah ada dan valid, return True
-    if len(existing_files) == len(FILE_IDS):
-        st.success("Semua file model sudah lengkap!")
-        return True
-    
-    # ============================================================
-    # STEP 2: Download file yang hilang atau corrupt
-    # ============================================================
-    
-    try:
-        import gdown
-    except ImportError:
-        st.error("Library gdown tidak ditemukan.")
-        st.stop()
-    
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    
-    # Tentukan file yang perlu di-download
-    files_to_download = list(FILE_IDS.keys())
-    # Hanya download file yang belum ada atau corrupt
-    # KECUALI model.safetensors - selalu cek ukuran
-    files_to_download = [
-        f for f in files_to_download 
-        if f not in existing_files 
-        or (f == "model.safetensors" and not is_file_valid(f, os.path.join(MODEL_DIR, f)))
-    ]
-    
-    if not files_to_download:
-        return True
-    
-    st.info(f"Mendownload {len(files_to_download)} file...")
-    progress_bar = st.progress(0)
-    
-    for idx, filename in enumerate(files_to_download):
-        file_id = FILE_IDS[filename]
-        output = os.path.join(MODEL_DIR, filename)
-        url = f"https://drive.google.com/uc?id={file_id}"
-        
-        st.write(f"Downloading: {filename}")
-        
-        success = download_with_retry(url, output)
-        
-        if not success:
-            st.error(f"Gagal download {filename}")
-            # Coba alternatif dengan requests
-            try:
-                import requests
-                st.write(f"  Mencoba dengan requests...")
-                response = requests.get(url, stream=True)
-                
-                if response.status_code == 200:
-                    with open(output, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    st.write(f"  Download dengan requests berhasil!")
-                else:
-                    st.error(f"  Requests gagal: status {response.status_code}")
-            except Exception as e:
-                st.error(f"  Requests error: {str(e)}")
-        
-        progress_bar.progress((idx + 1) / len(files_to_download))
-    
-    # ============================================================
-    # STEP 3: Verifikasi final
-    # ============================================================
-    
+    # Cek apakah semua file sudah ada dan valid
     all_valid = True
     for filename in FILE_IDS.keys():
         filepath = os.path.join(MODEL_DIR, filename)
         if not is_file_valid(filename, filepath):
             all_valid = False
-            st.warning(f"File {filename} tidak valid (ukuran: {os.path.getsize(filepath) if os.path.exists(filepath) else 0} bytes)")
+            break
     
-    if all_valid:
-        st.success("Semua file model valid!")
+    # Jika semua valid, langsung return
+    if all_valid and os.path.exists(config_path) and os.path.exists(model_path):
         return True
-    else:
-        st.error("Beberapa file model tidak valid.")
-        return False
+    
+    # Download file yang hilang atau corrupt
+    try:
+        import gdown
+    except ImportError:
+        st.error("Library gdown tidak ditemukan. Install dengan: pip install gdown")
+        st.stop()
+    
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    
+    for filename, file_id in FILE_IDS.items():
+        filepath = os.path.join(MODEL_DIR, filename)
+        
+        # Skip jika file sudah valid
+        if is_file_valid(filename, filepath):
+            continue
+        
+        # Hapus file corrupt jika ada
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except:
+                pass
+        
+        # Download file
+        url = f"https://drive.google.com/uc?id={file_id}"
+        try:
+            gdown.download(url, filepath, quiet=True)
+        except:
+            # Fallback dengan requests
+            try:
+                import requests
+                response = requests.get(url, stream=True)
+                if response.status_code == 200:
+                    with open(filepath, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+            except:
+                pass
+    
+    # Verifikasi final
+    for filename in FILE_IDS.keys():
+        filepath = os.path.join(MODEL_DIR, filename)
+        if not is_file_valid(filename, filepath):
+            return False
+    
+    return True
 
 # ================================================================
-# LOAD MODEL DENGAN OPTIMASI MEMORY
+# LOAD MODEL - TANPA PESAN DI HALAMAN
 # ================================================================
 
 @st.cache_resource
 def load_model_and_tokenizer():
-    """Load model dengan optimasi memory"""
+    """Load model - tanpa pesan di halaman"""
     
     if not download_model_from_drive():
-        st.error("Gagal mendownload model. Periksa koneksi dan coba lagi.")
+        st.error("Gagal memuat model. Periksa koneksi dan coba lagi.")
         st.stop()
     
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
+    # Load tokenizer
     try:
-        st.info("Memuat tokenizer...")
         tokenizer = IndoNLGTokenizer.from_pretrained(
             MODEL_DIR,
             use_fast=False,
             local_files_only=True,
         )
-    except Exception as e:
-        st.warning(f"Tokenizer fallback: {str(e)[:100]}")
+    except Exception:
         tokenizer = IndoNLGTokenizer.from_pretrained(
             "indobenchmark/indobart-v2",
             use_fast=False,
@@ -247,8 +169,8 @@ def load_model_and_tokenizer():
                 "additional_special_tokens": tokens_to_add
             })
     
+    # Load model
     try:
-        st.info("Memuat model (ini mungkin memakan waktu)...")
         model = MBartForConditionalGeneration.from_pretrained(
             MODEL_DIR,
             local_files_only=True,
@@ -257,7 +179,7 @@ def load_model_and_tokenizer():
             ignore_mismatched_sizes=True,
         )
     except Exception as e:
-        st.error(f"Gagal memuat model: {str(e)}")
+        st.error(f"Error loading model: {str(e)}")
         st.stop()
     
     if len(tokenizer) != model.config.vocab_size:
@@ -266,12 +188,10 @@ def load_model_and_tokenizer():
     if torch.cuda.is_available():
         device = torch.device('cuda')
         model = model.to(device)
-        st.info(f"Menggunakan GPU: {torch.cuda.get_device_name(0)}")
     else:
         device = torch.device('cpu')
         model = model.float()
         model = model.to(device)
-        st.info("Menggunakan CPU")
     
     model.eval()
     
@@ -282,7 +202,6 @@ def load_model_and_tokenizer():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    st.success("Model siap digunakan!")
     return model, tokenizer, device
 
 # ================================================================
@@ -587,7 +506,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ================================================================
-# LOAD MODEL
+# LOAD MODEL - HANYA 1 SPINNER TANPA LOG
 # ================================================================
 
 with st.spinner("Memuat model penerjemah..."):
