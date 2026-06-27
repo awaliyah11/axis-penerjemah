@@ -4,6 +4,4 @@ transformers==4.35.2
 sentencepiece==0.1.99
 indobenchmark-toolkit
 accelerate==0.25.0
-gdown==4.7.1
-requests==2.31.0
 huggingface-hub==0.23.0

@@ -1,19 +1,18 @@
 # ================================================================
 # AXIS - Penerjemah Cerdas Bahasa Daerah Sulawesi Tenggara
-# Deployment dengan Streamlit + Multi-Method Download
+# Deployment dengan Streamlit + HuggingFace Download
 # ================================================================
 
 import os
 import json
 import re
 import gc
-import time
 import torch
 import streamlit as st
 from pathlib import Path
 
 # ================================================================
-# IMPORT - PASTIKAN VERSI TRANSFORMERS COMPATIBLE
+# IMPORT
 # ================================================================
 
 try:
@@ -33,170 +32,28 @@ MAX_SRC_LENGTH = 64
 MAX_TGT_LENGTH = 64
 
 # ================================================================
-# ID FILE GOOGLE DRIVE
+# FUNGSI DOWNLOAD DARI HUGGINGFACE
 # ================================================================
 
-FILE_IDS = {
-    "added_tokens.json": "1YR2vlCw2fz_6DIHFxFRVz73Wcu_Yd9HA",
-    "config.json": "1KecJMLlqeniG5yqQpS3AnOl0yE13nR9v",
-    "generation_config.json": "1JBVKINDSDknEDED-TR1xiokocPfWxw_P",
-    "model.safetensors": "1fL6eMzMZV3f7U_wLE0bdiYyUe79mTH2F",
-    "project_config.json": "1dkcNpMWlL5CqnHe7T5ra1af2tGzAqy3G",
-    "sentencepiece.bpe.model": "1VR7jlkT5O4V4dV0r41seF4jLtSy1-F1Z",
-    "special_tokens_map.json": "1h_8pCi9ZKxVvtS696p64p44ZgEGvWd20",
-    "tokenizer_config.json": "17NXspewbqsxkjy4OJQmTlCTRwgqRvsUn",
-    "training_history.json": "12buknJ4VAvkcBYFzBVK4o667WONl9z4q",
-}
-
-# Ukuran minimal file yang valid (dalam bytes)
-MIN_FILE_SIZES = {
-    "model.safetensors": 500 * 1024 * 1024,  # 500 MB
-    "sentencepiece.bpe.model": 900 * 1024,    # 900 KB
-    "config.json": 1024,                      # 1 KB
-    "tokenizer_config.json": 100,             # 100 bytes
-}
-
-# ================================================================
-# FUNGSI DOWNLOAD DENGAN 3 METODE
-# ================================================================
-
-def is_file_valid(filename, filepath):
-    """Cek apakah file valid berdasarkan ukuran minimal"""
-    if not os.path.exists(filepath):
-        return False
-    size = os.path.getsize(filepath)
-    min_size = MIN_FILE_SIZES.get(filename, 0)
-    return size >= min_size
-
-def download_with_retry(file_id, output, max_retries=3):
-    """Download file dengan 3 metode berbeda (gdown, requests, direct)"""
-    
-    for attempt in range(max_retries):
-        # Method 1: gdown
-        try:
-            import gdown
-            url = f"https://drive.google.com/uc?id={file_id}"
-            gdown.download(url, output, quiet=True)
-            if os.path.exists(output) and os.path.getsize(output) > 0:
-                return True
-        except:
-            pass
-        
-        # Method 2: requests dengan confirm token (untuk file besar)
-        try:
-            import requests
-            import re
-            
-            url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            session = requests.Session()
-            response = session.get(url, stream=True)
-            
-            # Cek apakah ada confirm token (untuk file > 100MB)
-            if 'confirm' in response.text:
-                confirm_match = re.search(r'confirm=([^&]+)', response.text)
-                if confirm_match:
-                    confirm_token = confirm_match.group(1)
-                    url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token}"
-                    response = session.get(url, stream=True)
-            
-            if response.status_code == 200:
-                with open(output, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                if os.path.exists(output) and os.path.getsize(output) > 0:
-                    return True
-        except:
-            pass
-        
-        # Method 3: download dengan direct link (confirm=1)
-        try:
-            import requests
-            url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=1"
-            response = requests.get(url, stream=True)
-            if response.status_code == 200:
-                with open(output, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                if os.path.exists(output) and os.path.getsize(output) > 0:
-                    return True
-        except:
-            pass
-        
-        # Tunggu sebelum retry
-        if attempt < max_retries - 1:
-            time.sleep(3)
-    
-    return False
-
-def download_model_from_drive():
-    """Download model dengan 3 metode berbeda - tanpa pesan di halaman"""
+def download_model_from_huggingface():
+    """Download model dari HuggingFace Hub"""
     
     config_path = os.path.join(MODEL_DIR, "config.json")
     model_path = os.path.join(MODEL_DIR, "model.safetensors")
     
-    # Cek apakah semua file sudah ada dan valid
-    all_valid = True
-    for filename in FILE_IDS.keys():
-        filepath = os.path.join(MODEL_DIR, filename)
-        if not is_file_valid(filename, filepath):
-            all_valid = False
-            break
+    # Cek apakah model sudah ada
+    if os.path.exists(config_path) and os.path.exists(model_path):
+        size_mb = os.path.getsize(model_path) / (1024 * 1024)
+        if size_mb > 500:
+            return True
     
-    if all_valid and os.path.exists(config_path) and os.path.exists(model_path):
-        return True
-    
-    # Download file yang hilang atau corrupt
     try:
-        import gdown
-    except ImportError:
-        pass
-    
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    
-    for filename, file_id in FILE_IDS.items():
-        filepath = os.path.join(MODEL_DIR, filename)
-        
-        # Skip jika file sudah valid
-        if is_file_valid(filename, filepath):
-            continue
-        
-        # Hapus file corrupt jika ada
-        if os.path.exists(filepath):
-            try:
-                os.remove(filepath)
-            except:
-                pass
-        
-        # Download dengan 3 metode
-        success = download_with_retry(file_id, filepath)
-        
-        # Jika semua metode gagal, coba sekali lagi dengan gdown (verbose)
-        if not success:
-            try:
-                import gdown
-                url = f"https://drive.google.com/uc?id={file_id}"
-                gdown.download(url, filepath, quiet=False)
-            except:
-                pass
-    
-    # Verifikasi final
-    for filename in FILE_IDS.keys():
-        filepath = os.path.join(MODEL_DIR, filename)
-        if not is_file_valid(filename, filepath):
-            return False
-    
-    return True
-
-# ================================================================
-# FALLBACK: DOWNLOAD DARI HUGGINGFACE (Jika Google Drive Gagal)
-# ================================================================
-
-def download_from_huggingface():
-    """Fallback: download model dari HuggingFace Hub"""
-    try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import snapshot_download, hf_hub_download
         
         st.info("Mendownload model dari HuggingFace Hub...")
+        st.info("Ukuran file 502 MB. Proses ini memakan waktu 5-10 menit.")
+        
+        # Download semua file
         snapshot_download(
             repo_id="awaliyah11/axis-model",
             local_dir=MODEL_DIR,
@@ -205,39 +62,36 @@ def download_from_huggingface():
         )
         
         # Download file besar terpisah
-        try:
-            from huggingface_hub import hf_hub_download
-            hf_hub_download(
-                repo_id="awaliyah11/axis-model",
-                filename="model.safetensors",
-                local_dir=MODEL_DIR,
-                local_dir_use_symlinks=False,
-            )
-        except:
-            pass
+        hf_hub_download(
+            repo_id="awaliyah11/axis-model",
+            filename="model.safetensors",
+            local_dir=MODEL_DIR,
+            local_dir_use_symlinks=False,
+        )
+        
+        # Verifikasi
+        if os.path.exists(config_path) and os.path.exists(model_path):
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            st.success(f"Model berhasil didownload! Ukuran: {size_mb:.1f} MB")
+            return True
+        else:
+            st.error("Download gagal. File tidak lengkap.")
+            return False
             
-        return True
-    except:
+    except Exception as e:
+        st.error(f"Error download: {str(e)}")
         return False
 
 # ================================================================
-# LOAD MODEL - DENGAN FALLBACK
+# LOAD MODEL
 # ================================================================
 
 @st.cache_resource
 def load_model_and_tokenizer():
-    """Load model - dengan fallback ke HuggingFace jika Google Drive gagal"""
+    """Load model dari HuggingFace Hub"""
     
-    # Coba download dari Google Drive
-    download_success = download_model_from_drive()
-    
-    # Jika gagal, coba dari HuggingFace
-    if not download_success:
-        st.warning("Download dari Google Drive gagal. Mencoba dari HuggingFace Hub...")
-        download_success = download_from_huggingface()
-    
-    if not download_success:
-        st.error("Gagal memuat model dari Google Drive dan HuggingFace.")
+    if not download_model_from_huggingface():
+        st.error("Gagal memuat model. Periksa koneksi dan coba lagi.")
         st.stop()
     
     gc.collect()
@@ -601,7 +455,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ================================================================
-# LOAD MODEL - HANYA 1 SPINNER TANPA LOG
+# LOAD MODEL
 # ================================================================
 
 with st.spinner("Memuat model penerjemah..."):
