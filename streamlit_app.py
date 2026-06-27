@@ -15,7 +15,6 @@ from pathlib import Path
 # IMPORT YANG DIPERBAIKI
 # ================================================================
 
-# Perbaikan: import dari models.mbart
 from transformers.models.mbart import MBartForConditionalGeneration
 from transformers import MBartConfig
 from indobenchmark import IndoNLGTokenizer
@@ -36,29 +35,51 @@ MAX_TGT_LENGTH = 64
 def download_model_from_drive():
     """Download model dari Google Drive jika folder model tidak ada"""
     
-    if os.path.exists(MODEL_DIR) and os.path.exists(os.path.join(MODEL_DIR, "config.json")):
+    config_path = os.path.join(MODEL_DIR, "config.json")
+    model_path = os.path.join(MODEL_DIR, "model.safetensors")
+    
+    if os.path.exists(config_path) and os.path.exists(model_path):
+        print("Model sudah ada di server. Melanjutkan...")
         return True
+    
+    if os.path.exists(MODEL_DIR):
+        print("Folder model ditemukan tapi tidak lengkap. Mendownload ulang...")
+        import shutil
+        shutil.rmtree(MODEL_DIR)
     
     try:
         import gdown
     except ImportError:
-        st.error("Library 'gdown' tidak ditemukan. Install dengan: pip install gdown")
+        st.error("Library gdown tidak ditemukan. Install dengan: pip install gdown")
         st.stop()
     
     os.makedirs(MODEL_DIR, exist_ok=True)
     
     try:
         folder_url = f"https://drive.google.com/drive/folders/{GOOGLE_DRIVE_FOLDER_ID}"
-        with st.spinner("Mendownload model dari Google Drive... (5-10 menit)"):
-            gdown.download_folder(folder_url, output=MODEL_DIR, quiet=False, use_cookies=False)
         
-        if os.path.exists(os.path.join(MODEL_DIR, "config.json")):
+        st.info("Mendownload model dari Google Drive...")
+        st.info("Ukuran file 502 MB. Proses ini memakan waktu 5-10 menit.")
+        
+        gdown.download_folder(
+            folder_url, 
+            output=MODEL_DIR, 
+            quiet=False,
+            use_cookies=False
+        )
+        
+        if os.path.exists(config_path) and os.path.exists(model_path):
+            st.success("Model berhasil didownload!")
+            
+            size_mb = os.path.getsize(model_path) / (1024 * 1024)
+            st.info(f"Ukuran model: {size_mb:.1f} MB")
             return True
         else:
-            st.error("Download gagal. File config.json tidak ditemukan.")
+            st.error("Download gagal. File model tidak lengkap.")
             return False
+            
     except Exception as e:
-        st.error(f"Error: {str(e)}")
+        st.error(f"Error saat download: {str(e)}")
         return False
 
 # ================================================================
@@ -72,12 +93,10 @@ def load_model_and_tokenizer():
     if not download_model_from_drive():
         st.stop()
     
-    # Bersihkan memory sebelum load
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     
-    # Load tokenizer
     try:
         tokenizer = IndoNLGTokenizer.from_pretrained(
             MODEL_DIR,
@@ -97,20 +116,21 @@ def load_model_and_tokenizer():
                 "additional_special_tokens": tokens_to_add
             })
     
-    # Load model dengan optimasi
-    model = MBartForConditionalGeneration.from_pretrained(
-        MODEL_DIR,
-        local_files_only=True,
-        low_cpu_mem_usage=True,
-        torch_dtype=torch.float16,
-        ignore_mismatched_sizes=True,
-    )
+    try:
+        model = MBartForConditionalGeneration.from_pretrained(
+            MODEL_DIR,
+            local_files_only=True,
+            low_cpu_mem_usage=True,
+            torch_dtype=torch.float16,
+            ignore_mismatched_sizes=True,
+        )
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        st.stop()
     
-    # Resize embedding
     if len(tokenizer) != model.config.vocab_size:
         model.resize_token_embeddings(len(tokenizer))
     
-    # Pindahkan ke device
     if torch.cuda.is_available():
         device = torch.device('cuda')
         model = model.to(device)
@@ -121,7 +141,6 @@ def load_model_and_tokenizer():
     
     model.eval()
     
-    # Matikan gradient untuk hemat memory
     for param in model.parameters():
         param.requires_grad = False
     
@@ -502,7 +521,6 @@ with st.sidebar:
 # MAIN CONTENT
 # ================================================================
 
-# Baris bahasa
 col1, col2, col3 = st.columns([2, 0.6, 2])
 
 with col1:
@@ -538,7 +556,6 @@ with col3:
 
 st.markdown("---")
 
-# Input dan Output
 col_input, col_output = st.columns(2)
 
 with col_input:
