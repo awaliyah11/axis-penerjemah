@@ -547,7 +547,7 @@ with st.sidebar:
     st.markdown("### TENTANG AXIS")
     st.markdown("""
     <div class="sidebar-info">
-        <p>AXIS adalah penerjemah cerdas untuk bahasa daerah 
+        <p>AXIS adalah penerjemah untuk bahasa daerah 
         Sulawesi Tenggara yang dibangun menggunakan model IndoBART.</p>
         <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #6c757d;">
             Model fine-tuned dengan data parallel corpus
